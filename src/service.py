@@ -112,7 +112,7 @@ class TelethonClientManager:
                 await client.connect()
             await client.log_out()
             print(user_id)
-            User.get(User.user_id == user_id).delete_instance()
+            User.get(User.user_id == user_id).delete_instance(recursive=True)
             os.remove(self.session_file)
             del self.clients[user_id]
             return 'Вы успешно вышли из аккаунта.'
@@ -139,14 +139,8 @@ class TelethonClientManager:
 
         async with client:
             source_peer = await client.get_input_entity(int(self.bot_id))
-            print(source_peer)
             for target_chat_id in chats:
                 target_peer = await client.get_input_entity(int(target_chat_id))
-                print(target_peer)
-                msgs = await client.get_messages(source_peer, limit=5)
-                for msg in msgs:
-                    print(msg.text)
-
                 await client.forward_messages(target_peer, int(message_id), source_peer, drop_author=True)
             user = await client.get_me()
             await client.send_message(user.id, f'Сообщение "{message_id}" было отправлено в чаты: {", ".join([str(chat_id) for chat_id in chats])}')
@@ -162,7 +156,6 @@ class TelethonClientManager:
         return 'Сообщение успешно запланировано.'
 
     async def get_chats(self, user_id):
-        print(user_id)
         if user_id not in self.clients:
             self.load_sessions()
 

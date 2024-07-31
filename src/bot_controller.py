@@ -10,6 +10,7 @@ from src.database_models import db, User, Schedule
 import json
 from datetime import datetime, timedelta
 import peewee
+import asyncio
 
 # Включение логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -174,7 +175,6 @@ class BotController:
             chat_id = int(query.data.split('_')[-1])
             if chat_id not in context.user_data['selected_chats']:
                 context.user_data['selected_chats'].append(chat_id)
-            print(context.user_data.get('preferences'))
             await self.display_chat_selection_menu(query, context, preferences=context.user_data.get('preferences'))
 
         elif query.data == 'done_selecting_chats':
@@ -388,28 +388,22 @@ class BotController:
             if update.message.audio:
                 audio = update.message.audio 
                 text = '1'
-                print(audio)
             elif update.message.video:
                 video = update.message.video
                 text = '1'
-                print(video)
             elif update.message.photo:
                 photo = update.message.photo
                 text = '1'
-                print(photo)
         else:
             if update.audio:
                 audio = update.audio 
                 text = '1'
-                print(audio)
             elif update.video:
                 video = update.video
                 text = '1'
-                print(video)
             elif update.photo:
                 photo = update.photo
                 text = '1'
-                print(photo)
         if user_id not in self.telethon_manager.clients:
             await update.message.reply_text('Пожалуйста, сначала авторизуйтесь с помощью кнопки "Авторизация".')
             return
@@ -458,6 +452,29 @@ class BotController:
         # Отображаем главное меню
         await self.display_main_menu(callback_query.message)
 
+    def reload_scheduler(self):
+        self.scheduler.remove_all_jobs()
+        
+        schedules = Schedule.select()
+        for schedule in schedules:
+            scheduled_time = schedule.scheduled_time
+            if scheduled_time < datetime.now():
+                scheduled_time += timedelta(days=1)
+                schedule.scheduled_time = scheduled_time
+                schedule.save()
+            self.scheduler.add_job(
+                self.telethon_manager.send_scheduled_message,
+                CronTrigger(hour=scheduled_time.hour, minute=scheduled_time.minute, second=0),
+                args=[schedule.user.user_id, schedule.message, json.loads(schedule.chats)],
+                id=f'schedule_{schedule.id}'
+            )
+
+        self.scheduler.add_job(
+            self.reload_scheduler,
+            CronTrigger(hour=0, minute=0, second=0),
+            id='daily_display_main_menu'
+        )
+    
     async def display_main_menu(self, message):
         user_id = message.from_user.id if hasattr(message, 'from_user') else message.message.from_user.id
         keyboard = [
@@ -475,26 +492,7 @@ class BotController:
         if user_id in self.telethon_manager.clients:
             self.telethon_manager.set_chat_bot_id(self.application.bot.id)
 
-            self.scheduler.remove_all_jobs()
-        
-            schedules = Schedule.select()
-            for schedule in schedules:
-                scheduled_time = schedule.scheduled_time
-                if scheduled_time < datetime.now():
-                    scheduled_time += timedelta(days=1)
-                self.scheduler.add_job(
-                    self.telethon_manager.send_scheduled_message,
-                    CronTrigger(hour=scheduled_time.hour, minute=scheduled_time.minute, second=0),
-                    args=[schedule.user.user_id, schedule.message, json.loads(schedule.chats)],
-                    id=f'schedule_{schedule.id}'
-                )
-
-            self.scheduler.add_job(
-            self.display_main_menu,
-            CronTrigger(hour=0, minute=0, second=0),  # Меняйте время по необходимости
-            args=[message,],  # Или передайте необходимые аргументы, если нужно
-            id='daily_display_main_menu'
-        )
+        self.reload_scheduler()
 
         if hasattr(message, 'edit_message_text'):
             await message.edit_message_text('Привет! Я твой бот-контроллер. Пожалуйста, авторизуйтесь и настройте расписание.', reply_markup=reply_markup)
@@ -515,7 +513,6 @@ class BotController:
         keyboard = [
             [InlineKeyboardButton(chat.title, callback_data=f'select_chat_{chat.id}')] for chat in page_chats
         ]
-        print(preferences)
         if current_page > 0:
             keyboard.append([InlineKeyboardButton("Предыдущая страница", callback_data='prev_page')])
         if end < len(unselected_chats):
