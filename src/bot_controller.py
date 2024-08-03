@@ -109,16 +109,14 @@ class BotController:
             await self.handle_edit(update, context)
 
         elif data.startswith('instructions'):
-            await update.callback_query.edit_message_text('Добро пожаловать. Телеграм дофига умный, поэтому есть данная инструкция. При вводе кода который пришлет вам телеграм, вам придется воспользоваться табличкой которую я создал, каждая буква отвечает за свою цифру, то бишь вводите код из букв, который соответветсвовал бы вашему коду в числовом виде.\na = 1\tb = 2\tc = 3 \nd = 4\te = 5\tf = 6\ng = 7\th = 8\ti = 9 \n\tj = 10')
-
-        elif data.startswith('save_schedule'):
-            await self.save_schedule(query, context)
+            await update.callback_query.edit_message_text('Добро пожаловать. Телеграм дофига умный, поэтому есть данная инструкция. При вводе кода который пришлет вам телеграм, вам придется воспользоваться табличкой которую я создал, каждая буква отвечает за свою цифру, то бишь вводите код из букв, который соответветсвовал бы вашему коду в числовом виде.\na = 1\tb = 2\tc = 3 \nd = 4\te = 5\tf = 6\ng = 7\th = 8\ti = 9 \n\tj = 0')
 
         elif data.startswith('delete_schedule_'):
-            schedule_id = int(data.split('_')[2])
+            schedule_id = data.split('_')[2]
             await self.delete_schedule(query, context, schedule_id)
         elif data.startswith('schedule_'):
-            schedule_id = int(data.split('_')[1])
+            schedule_id = data.split('_')[1]
+            print(data)
             await self.show_schedule_details(query, context, schedule_id)
 
         elif data == 'show_schedules':
@@ -126,7 +124,7 @@ class BotController:
             await self.show_schedules(update, context)
         
         elif data.startswith('schedule_'):
-            schedule_id = int(data.split('_')[1])
+            schedule_id = data.split('_')[1]
             schedule = Schedule.get_by_id(schedule_id)
             chat_titles = await self.telethon_manager.get_chat_titles(user_id, json.loads(schedule.chats))
             chat_titles_str = ', '.join([title for chat_id, title in chat_titles.items()])
@@ -184,9 +182,6 @@ class BotController:
             else:
                 context.user_data['schedule_step'] = 'time'
                 await query.edit_message_text('Введите время в формате HH:MM через запятую.')
-
-        elif data == 'confirm_edit':
-            await self.save_edited_schedule(query, context)
 
         elif query.data == 'show_chats':
             if user_id not in self.telethon_manager.clients:
@@ -352,35 +347,6 @@ class BotController:
             else:
                 await update.message.reply_text('Пожалуйста, выберите действие с помощью инлайн-кнопок.')
 
-    async def save_edited_schedule(self, callback_query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = callback_query.from_user.id
-        schedule_id = context.user_data.get('edit_schedule_id')
-        
-        if not schedule_id:
-            await callback_query.message.reply_text('Ошибка: Расписание не выбрано.')
-            return
-
-        schedule = Schedule.get_by_id(schedule_id)
-
-        if 'new_times' in context.user_data:
-            times = context.user_data['new_times']
-            for time in times:
-                # Обновление времени в базе данных
-                schedule.scheduled_time = datetime.combine(schedule.scheduled_time.date(), time)
-        
-        if 'new_message' in context.user_data:
-            schedule.message = context.user_data['new_message']
-
-        if 'selected_chats' in context.user_data:
-            schedule.chats = json.dumps(context.user_data['selected_chats'])
-
-        schedule.save()
-        
-        await callback_query.message.reply_text('Расписание успешно обновлено.')
-        # Очистка данных пользователя и возвращение к главному меню
-        context.user_data.clear()
-        await self.display_main_menu(callback_query.message)
-
     async def handle_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = update.message.from_user.id
         text = update.message.message_id if context.user_data.get('schedule_step') == 'message' else update.message.text
@@ -429,29 +395,6 @@ class BotController:
                 del context.user_data['selected_chats']
                 del context.user_data['times']
 
-    async def save_schedule(self, callback_query, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = callback_query.from_user.id
-        times = context.user_data.get('schedule_times', [])
-        message = context.user_data.get('schedule_message', '')
-        selected_chats = context.user_data.get('selected_chats', [])
-
-        # Сохраняем расписание в базу данных и добавляем задачу в планировщик
-        for time in times:
-            scheduled_datetime = datetime.combine(datetime.today(), time)
-            if scheduled_datetime < datetime.now():
-                scheduled_datetime += timedelta(days=1)
-            Schedule.create(user_id=user_id, message=message, scheduled_time=scheduled_datetime, chats=json.dumps(selected_chats))
-            self.scheduler.add_job(self.telethon_manager.send_scheduled_message, CronTrigger(hour=time.hour, minute=time.minute, second=0), args=[user_id, message, selected_chats])
-
-        # Очищаем состояние пользователя
-        context.user_data.clear()
-
-        # Отправляем сообщение об успешном создании расписания
-        await callback_query.message.reply_text('Сообщение успешно запланировано!')
-
-        # Отображаем главное меню
-        await self.display_main_menu(callback_query.message)
-
     def reload_scheduler(self):
         self.scheduler.remove_all_jobs()
         
@@ -462,17 +405,20 @@ class BotController:
                 scheduled_time += timedelta(days=1)
                 schedule.scheduled_time = scheduled_time
                 schedule.save()
-            self.scheduler.add_job(
+            job = self.scheduler.add_job(
                 self.telethon_manager.send_scheduled_message,
-                CronTrigger(hour=scheduled_time.hour, minute=scheduled_time.minute, second=0),
+                CronTrigger(hour=scheduled_time.hour, minute=scheduled_time.minute, second=0, jitter=30),
                 args=[schedule.user.user_id, schedule.message, json.loads(schedule.chats)],
+                coalesce=False,
                 id=f'schedule_{schedule.id}'
             )
+            print(job.coalesce)
 
         self.scheduler.add_job(
             self.reload_scheduler,
             CronTrigger(hour=0, minute=0, second=0),
-            id='daily_display_main_menu'
+            id='daily_display_main_menu',
+            coalesce=False
         )
     
     async def display_main_menu(self, message):

@@ -8,9 +8,10 @@ class BaseModel(Model):
         database = db
 
 class User(BaseModel):
-    user_id = IntegerField(unique=True)
+    user_id = IntegerField(unique=True, primary_key=True)
 
 class Schedule(BaseModel):
+    id = CharField(primary_key=True)
     user = ForeignKeyField(User, backref='schedules')
     message = TextField()
     scheduled_time = DateTimeField()

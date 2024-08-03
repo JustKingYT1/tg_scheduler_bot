@@ -7,6 +7,8 @@ from src.database_models import User, Schedule
 from datetime import datetime, timedelta
 from apscheduler.triggers.cron import CronTrigger
 from settings import ABC
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import telethon
 
 class TelethonClientManager:
     bot_id: int
@@ -15,7 +17,7 @@ class TelethonClientManager:
         self.api_hash = api_hash
         self.clients = {}
         self.auth_states = {}
-        self.scheduler = scheduler
+        self.scheduler: AsyncIOScheduler = scheduler
         self.session_file = 'sessions.json'
         self.load_sessions()
 
@@ -79,7 +81,7 @@ class TelethonClientManager:
                 self.clients[user_id] = client
                 del self.auth_states[user_id]
                 self.save_sessions()
-                User.get_or_create(id=user_id, user_id=user_id)
+                User.get_or_create(user_id=user_id)
                 return 'Вы успешно авторизовались!'
             except errors.SessionPasswordNeededError:
                 self.auth_states[user_id]['step'] = 'password'
@@ -96,7 +98,7 @@ class TelethonClientManager:
                 self.clients[user_id] = client
                 del self.auth_states[user_id]
                 self.save_sessions()
-                User.get_or_create(id=user_id, user_id=user_id)
+                User.get_or_create(user_id=user_id)
                 return 'Вы успешно авторизовались!'
             except Exception as e:
                 logging.error(f'Ошибка авторизации с паролем: {e}')
@@ -141,7 +143,10 @@ class TelethonClientManager:
             source_peer = await client.get_input_entity(int(self.bot_id))
             for target_chat_id in chats:
                 target_peer = await client.get_input_entity(int(target_chat_id))
-                await client.forward_messages(target_peer, int(message_id), source_peer, drop_author=True)
+                try:
+                    await client.forward_messages(target_peer, int(message_id), source_peer, drop_author=True)
+                except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+                    continue
             user = await client.get_me()
             await client.send_message(user.id, f'Сообщение "{message_id}" было отправлено в чаты: {", ".join([str(chat_id) for chat_id in chats])}')
 
@@ -151,8 +156,8 @@ class TelethonClientManager:
             scheduled_datetime = datetime.combine(datetime.today(), time)
             if scheduled_datetime < datetime.now():
                 scheduled_datetime += timedelta(days=1)
-            Schedule.create(user=user, message=message, scheduled_time=scheduled_datetime, chats=json.dumps(chats))
-            self.scheduler.add_job(self.send_scheduled_message, CronTrigger(hour=time.hour, minute=time.minute, second=0), args=[user_id, message, chats])
+            job = self.scheduler.add_job(self.send_scheduled_message, CronTrigger(hour=time.hour, minute=time.minute, second=0, jitter=60), args=[user_id, message, chats], coalesce=False)
+            Schedule.create(id=job.id, user=user, message=message, scheduled_time=scheduled_datetime, chats=json.dumps(chats))
         return 'Сообщение успешно запланировано.'
 
     async def get_chats(self, user_id):
