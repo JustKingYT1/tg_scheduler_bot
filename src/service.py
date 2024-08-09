@@ -9,6 +9,8 @@ from apscheduler.triggers.cron import CronTrigger
 from settings import ABC
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import telethon
+import asyncio
+import time
 
 class TelethonClientManager:
     bot_id: int
@@ -141,13 +143,23 @@ class TelethonClientManager:
 
         async with client:
             source_peer = await client.get_input_entity(int(self.bot_id))
+            user = await client.get_me()
+
             for target_chat_id in chats:
-                target_peer = await client.get_input_entity(int(target_chat_id))
+                try:
+                    target_peer = await client.get_input_entity(int(target_chat_id))
+                except ValueError:
+                    continue
                 try:
                     await client.forward_messages(target_peer, int(message_id), source_peer, drop_author=True)
+                    await client.send_message(user.id, f'Сообщение "{message_id}" было отправлено в чат {target_chat_id}')
                 except telethon.errors.rpcerrorlist.ChatAdminRequiredError:
+                    await client.send_message(user.id, f'Эта группа является каналом, и туда писать ты не можешь. Такие группы не нужно добавлять бро')
                     continue
-            user = await client.get_me()
+                except telethon.errors.rpcerrorlist.FloodWaitError as ex:
+                    await client.send_message(user.id, f'Бот попал в флуд лист, отдохни часок +- ~ {ex}')
+                    return
+                time.sleep(60)
             await client.send_message(user.id, f'Сообщение "{message_id}" было отправлено в чаты: {", ".join([str(chat_id) for chat_id in chats])}')
 
     async def schedule_message(self, user_id, message, scheduled_times, chats):

@@ -10,10 +10,17 @@ from src.database_models import db, User, Schedule
 import json
 from datetime import datetime, timedelta
 import peewee
+import telegram
 import asyncio
 
 # Включение логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig( #filename='log.txt',
+                     #filemode='a',
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+                    level=logging.INFO,
+                    datefmt='%H:%M:%S')
+
+logging.info("Running Telegram Bot")
 
 class BotController:
     def __init__(self, token):
@@ -101,7 +108,7 @@ class BotController:
             await query.edit_message_text('Введите новый текст сообщения:')
 
         elif data.startswith('edit_chats'):
-            context.user_data['preferences'] = True
+            context.user_data['preferences'] = False
             context.user_data['edit_step'] = 'chats'
             context.user_data['current_page'] = 0
             context.user_data['selected_chats'] = []
@@ -143,17 +150,18 @@ class BotController:
 
         elif query.data == 'prev_page':
             context.user_data['current_page'] = max(0, context.user_data.get('current_page', 0) - 1)
-            await self.display_chat_selection_menu(query, context)
+            await self.display_chat_selection_menu(query, context, preferences=context.user_data.get('preferences'))
         elif query.data == 'next_page':
             context.user_data['current_page'] = context.user_data.get('current_page', 0) + 1
-            await self.display_chat_selection_menu(query, context)
+            await self.display_chat_selection_menu(query, context, preferences=context.user_data.get('preferences'))
         elif query.data == 'back':
-            if context.user_data.get('preferences'):
+            print(context.user_data.get('preferences'))
+            if not context.user_data.get('preferences'):
                 schedule = context.user_data['current_schedule']
                 schedule.chats = context.user_data['selected_chats']
                 schedule.save()
                 await query.message.reply_text('Чаты изменены')
-            context.user_data['preferences'] = False
+                context.user_data['preferences'] = True
             await self.display_main_menu(query)
         elif query.data == 'authorize':
             if user_id in self.telethon_manager.clients:
@@ -168,7 +176,8 @@ class BotController:
                 await query.edit_message_text('Пожалуйста, сначала авторизуйтесь с помощью кнопки "Авторизация".')
             else:
                 context.user_data['selected_chats'] = []
-                await self.display_chat_selection_menu(query, context)
+                context.user_data['preferences'] = True
+                await self.display_chat_selection_menu(query, context, preferences=context.user_data.get('preferences'))
         elif query.data.startswith('select_chat_'):
             chat_id = int(query.data.split('_')[-1])
             if chat_id not in context.user_data['selected_chats']:
@@ -316,11 +325,10 @@ class BotController:
 
             elif edit_step == 'chats':
                 context.user_data['selected_chats'] = context.user_data.get('selected_chats', [])
-                context.user_data['preferences'] = True
-                print(context.user_data['preferences'])
+                context.user_data['preferences'] = False
                 schedule = Schedule.get(Schedule.id==schedule_id)
                 context.user_data['current_schedule'] = schedule
-                await self.display_chat_selection_menu(update.callback_query, context, preferences=True)    
+                await self.display_chat_selection_menu(update.callback_query, context, context.user_data['preferences'])    
 
         else:
             await update.message.reply_text('Неизвестный шаг редактирования.')
@@ -412,7 +420,6 @@ class BotController:
                 coalesce=False,
                 id=f'schedule_{schedule.id}'
             )
-            print(job.coalesce)
 
         self.scheduler.add_job(
             self.reload_scheduler,
@@ -420,7 +427,10 @@ class BotController:
             id='daily_display_main_menu',
             coalesce=False
         )
-    
+        # print(self.scheduler._jobstores)
+        # print(self.scheduler._job_defaults)
+        print(self.scheduler.get_jobs())
+
     async def display_main_menu(self, message):
         user_id = message.from_user.id if hasattr(message, 'from_user') else message.message.from_user.id
         keyboard = [
@@ -445,7 +455,8 @@ class BotController:
         else:
             await message.reply_text('Привет! Я твой бот-контроллер. Пожалуйста, авторизуйтесь и настройте расписание.', reply_markup=reply_markup)
 
-    async def display_chat_selection_menu(self, message, context, preferences: bool=False) -> None:
+    async def display_chat_selection_menu(self, message, context, preferences: bool) -> None:
+        print(preferences)
         user_id = message.from_user.id if isinstance(message, Message) or isinstance(message, CallbackQuery) else message.message.from_user.id
         chats = await self.telethon_manager.get_chats(user_id)
         selected_chats = context.user_data.get('selected_chats', [])
@@ -465,10 +476,12 @@ class BotController:
             keyboard.append([InlineKeyboardButton("Следующая страница", callback_data='next_page')])
 
         keyboard.append([InlineKeyboardButton("Назад", callback_data='back')])
-        keyboard.append([InlineKeyboardButton("Готово", callback_data='done_selecting_chats' if not preferences else f'back')])
+        keyboard.append([InlineKeyboardButton("Готово", callback_data='done_selecting_chats' if preferences else f'back')])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        if isinstance(message, CallbackQuery):
-            await message.edit_message_text('Выберите чаты для отправки сообщений:', reply_markup=reply_markup)
-        elif isinstance(message, Message):
-            await message.reply_text('Выберите чаты для отправки сообщений:', reply_markup=reply_markup)
-
+        try:
+            if isinstance(message, CallbackQuery):
+                await message.edit_message_text('Выберите чаты для отправки сообщений:', reply_markup=reply_markup)
+            elif isinstance(message, Message):
+                await message.reply_text('Выберите чаты для отправки сообщений:', reply_markup=reply_markup)
+        except telegram.error.BadRequest:
+            pass
